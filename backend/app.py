@@ -21,7 +21,6 @@ CORS(app)
 
 BASE_DIR = os.path.join(os.getcwd(), 'data')
 PROJECTS_FILE = os.path.join(BASE_DIR, 'projects.json')
-ADJUSTMENTS_FILE = os.path.join(BASE_DIR, 'adjustments.json') # Store user edits
 ALLOWED_EXTENSIONS = {'pdf', 'xlsx', 'xls', 'csv', 'docx', 'doc'}
 
 # --- UTILS ---
@@ -35,29 +34,6 @@ def save_project_metadata(company_id, data):
     projects = load_projects()
     projects[company_id] = data
     with open(PROJECTS_FILE, 'w') as f: json.dump(projects, f, indent=4)
-
-def load_adjustments(company_id):
-    if not os.path.exists(ADJUSTMENTS_FILE): return {}
-    try:
-        data = json.load(open(ADJUSTMENTS_FILE))
-        return data.get(company_id, {})
-    except: return {}
-
-def save_adjustment(company_id, key, value=None, comment=None):
-    all_adj = {}
-    if os.path.exists(ADJUSTMENTS_FILE):
-        try: all_adj = json.load(open(ADJUSTMENTS_FILE))
-        except: pass
-    
-    if company_id not in all_adj: all_adj[company_id] = {}
-    
-    if key not in all_adj[company_id]: all_adj[company_id][key] = {}
-    
-    if value is not None: all_adj[company_id][key]['value'] = value
-    if comment is not None: all_adj[company_id][key]['comment'] = comment
-    
-    with open(ADJUSTMENTS_FILE, 'w') as f: json.dump(all_adj, f, indent=4)
-    return all_adj[company_id]
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -218,21 +194,6 @@ def extract_data():
         return jsonify({"error": str(e)}), 500
 
 # --- CONSOLIDATE ENDPOINT ---
-@app.route('/adjustments', methods=['POST'])
-def update_adjustment():
-    data = request.json
-    company_id = data.get('company_id')
-    updates = data.get('updates', []) # List of {key, value, comment}
-    
-    if not company_id: return jsonify({"error": "No ID"}), 400
-    
-    current_adj = {}
-    for item in updates:
-        current_adj = save_adjustment(company_id, item['key'], item.get('value'), item.get('comment'))
-        
-    return jsonify(current_adj), 200
-
-# --- CONSOLIDATE ENDPOINT (ENHANCED) ---
 @app.route('/consolidate', methods=['POST'])
 def consolidate_data():
     try:
@@ -244,10 +205,14 @@ def consolidate_data():
         if company_id not in projects: return jsonify({"error": "Project not found"}), 404
         
         years = sorted(projects[company_id].get('years', []))
-        adjustments = load_adjustments(company_id)
-        
-        # Load raw data and Apply Adjustments
+        consolidated = {
+            "years": years,
+            "calculated_income_statement": []
+        }
+
+        # Temp storage for calc logic
         yearly_data = {}
+
         for year in years:
             extract_path = os.path.join(BASE_DIR, company_id, str(year), f"{company_id}_{year}_extracted.json")
             if os.path.exists(extract_path):
@@ -255,126 +220,176 @@ def consolidate_data():
                     full_data = json.load(f)
                     fs = full_data.get('financial_statements', {})
                     yearly_data[year] = {
-                        "statement_of_profit_or_loss": fs.get('statement_of_profit_or_loss', []),
-                        "statement_of_financial_position": fs.get('statement_of_financial_position', []),
-                        "statement_of_cash_flows": fs.get('statement_of_cash_flows', []),
+                        "pl": fs.get('statement_of_profit_or_loss', []),
+                        "bs": fs.get('statement_of_financial_position', []),
+                        "cf": fs.get('statement_of_cash_flows', []),
+                        "tb": full_data.get('trial_balance', [])
                     }
-                    
-                    # APPLY OVERRIDES FROM ADJUSTMENTS
-                    # Adjustment Keys: "{section}_{line_item}_{year}"
-                    for section in yearly_data[year]:
-                        for idx, row in enumerate(yearly_data[year][section]):
-                            key = f"{section}_{row['line_item']}_{year}"
-                            if key in adjustments and 'value' in adjustments[key]:
-                                row['value'] = float(adjustments[key]['value'])
             else:
-                yearly_data[year] = {"statement_of_profit_or_loss": [], "statement_of_financial_position": [], "statement_of_cash_flows": []}
+                yearly_data[year] = {"pl": [], "bs": [], "cf": [], "tb": []}
 
-        # --- 1. CALCULATED MODEL LOGIC ---
-        calculated_rows = []
+        # --- CALCULATE METRICS ROW BY ROW ---
+        # Helper to build a row dictionary across all years
         def build_row(label, value_map, format_as_percent=False):
-            row = {"line_item": label, "is_header": False, "id": f"CALC_{label.replace(' ','_')}"} # Unique ID for comments
+            row = {"line_item": label, "is_header": False}
             for y in years:
-                # Check for explicit override on the calculated row itself
-                calc_key = f"CALCULATED_{label}_{y}"
-                if calc_key in adjustments and 'value' in adjustments[calc_key]:
-                    val = float(adjustments[calc_key]['value'])
-                else:
-                    val = value_map.get(y, 0)
-                
+                val = value_map.get(y, 0)
                 row[y] = f"{val:.1f}%" if format_as_percent else val
             return row
 
-        # Logic Shortcuts
-        pl = lambda y: yearly_data[y]['statement_of_profit_or_loss']
-        cf = lambda y: yearly_data[y]['statement_of_cash_flows']
+        # 1. Revenue
+        rev_map = {}
+        for y in years:
+            rev_map[y] = find_val(yearly_data[y]['pl'], ['revenue', 'turnover', 'sales'])
+        consolidated['calculated_income_statement'].append(build_row("Revenue from Operations", rev_map))
 
-        # Metrics
-        rev_map = {y: find_val(pl(y), ['revenue', 'turnover', 'sales']) for y in years}
-        calculated_rows.append(build_row("Revenue from Operations", rev_map))
-
+        # 2. Revenue Growth Rate
         growth_map = {}
         for i, y in enumerate(years):
             if i == 0: growth_map[y] = 0
             else:
-                prev, curr = rev_map[years[i-1]], rev_map[y]
-                growth_map[y] = ((curr - prev) / prev) * 100 if prev != 0 else 0
-        calculated_rows.append(build_row("Revenue Growth Rate (%)", growth_map, True))
+                prev_rev = rev_map[years[i-1]]
+                curr_rev = rev_map[y]
+                if prev_rev != 0:
+                    growth_map[y] = ((curr_rev - prev_rev) / prev_rev) * 100
+                else: growth_map[y] = 0
+        consolidated['calculated_income_statement'].append(build_row("Revenue Growth Rate (%)", growth_map, True))
 
-        cogs_map = {y: find_val(pl(y), ['cost of sales', 'cost of revenue', 'cost of goods']) for y in years}
-        calculated_rows.append(build_row("Cost of Goods Sold", cogs_map))
+        # 3. COGS (Cost of Sales / Closing Inventories context)
+        cogs_map = {}
+        for y in years:
+            cogs_map[y] = find_val(yearly_data[y]['pl'], ['cost of sales', 'cost of revenue', 'cost of goods'])
+        consolidated['calculated_income_statement'].append(build_row("Cost of Goods Sold", cogs_map))
 
-        gp_map = {y: rev_map[y] + cogs_map[y] for y in years}
-        calculated_rows.append(build_row("Gross Profit", gp_map))
-        
-        gp_margin = {y: (gp_map[y]/rev_map[y])*100 if rev_map[y] else 0 for y in years}
-        calculated_rows.append(build_row("GP Margin %", gp_margin, True))
+        # 4. Other Direct Expenses (Employee + Direct)
+        ode_map = {}
+        for y in years:
+            emp = find_val(yearly_data[y]['pl'], ['employee', 'staff', 'personnel'])
+            direct = find_val(yearly_data[y]['pl'], ['direct exp', 'direct cost'])
+            ode_map[y] = emp + direct
+        consolidated['calculated_income_statement'].append(build_row("Other Direct Expenses", ode_map))
 
-        other_income = {y: find_val(pl(y), ['other income']) for y in years}
-        calculated_rows.append(build_row("Other Income", other_income))
+        # 5. Gross Profit (Rev - COGS - ODE)
+        gp_map = {}
+        for y in years:
+            gp_map[y] = rev_map[y] - cogs_map[y] - ode_map[y]
+        consolidated['calculated_income_statement'].append(build_row("Gross Profit", gp_map))
 
-        g_and_a_expense = {y: find_val(pl(y), ['administrative expenses','administrative and selling expenses']) for y in years}
-        calculated_rows.append(build_row("G&A Expense", g_and_a_expense))
+        # 6. COGS % (COGS / Rev)
+        # 7. GP Margin % (GP / Rev)
+        cogs_pct_map = {}
+        gp_margin_map = {}
+        for y in years:
+            rev = rev_map[y] if rev_map[y] != 0 else 1
+            cogs_pct_map[y] = (cogs_map[y] / rev) * 100
+            gp_margin_map[y] = (gp_map[y] / rev) * 100
+        consolidated['calculated_income_statement'].append(build_row("COGS %", cogs_pct_map, True))
+        consolidated['calculated_income_statement'].append(build_row("GP Margin %", gp_margin_map, True))
 
-        ebitda_map = {y: gp_map[y] + other_income[y] + g_and_a_expense[y] for y in years}
-        calculated_rows.append(build_row("EBITDA", ebitda_map))
+        # 8. Other Income
+        other_inc_map = {}
+        for y in years:
+            other_inc_map[y] = find_val(yearly_data[y]['pl'], ['other income'])
+        consolidated['calculated_income_statement'].append(build_row("Other Income", other_inc_map))
 
-        depr_map = {y: find_val(pl(y), ['depreciation']) or find_val(cf(y), ['depreciation']) for y in years}
-        calculated_rows.append(build_row("Depreciation & Amortization", depr_map))
+        # 9. G&A Expenses
+        ga_map = {}
+        for y in years:
+            ga_map[y] = find_val(yearly_data[y]['pl'], ['general', 'administrative', 'operating exp'])
+        consolidated['calculated_income_statement'].append(build_row("General & Administrative Expenses", ga_map))
 
-        ebit_map = {y: ebitda_map[y] - depr_map[y] for y in years}
-        calculated_rows.append(build_row("EBIT", ebit_map))
+        # 10. G&A %
+        ga_pct_map = {}
+        for y in years:
+            rev = rev_map[y] if rev_map[y] != 0 else 1
+            ga_pct_map[y] = (ga_map[y] / rev) * 100
+        consolidated['calculated_income_statement'].append(build_row("G&A as % of Revenue", ga_pct_map, True))
 
-        tax_map = {y: ebit_map[y] * 0.09 for y in years}
-        calculated_rows.append(build_row("Taxes (9% on EBIT)", tax_map))
+        # 11. EBITDA (GP + Other Income - G&A)
+        ebitda_map = {}
+        for y in years:
+            ebitda_map[y] = gp_map[y] + other_inc_map[y] - ga_map[y]
+        consolidated['calculated_income_statement'].append(build_row("EBITDA", ebitda_map))
 
-        ni_map = {y: ebit_map[y] - tax_map[y] for y in years}
-        calculated_rows.append(build_row("Net Income", ni_map))
+        # 12. EBITDA Margin
+        ebitda_pct_map = {}
+        for y in years:
+            rev = rev_map[y] if rev_map[y] != 0 else 1
+            ebitda_pct_map[y] = (ebitda_map[y] / rev) * 100
+        consolidated['calculated_income_statement'].append(build_row("EBITDA Margin %", ebitda_pct_map, True))
 
-        # --- 2. RAW CONSOLIDATION LOGIC ---
-        # Helper to stack raw statements side-by-side
-        def consolidate_raw_section(section_key):
-            # 1. Gather all unique line items (preserving order somewhat)
-            all_lines = []
-            seen_lines = set()
-            for y in years:
-                for row in yearly_data[y][section_key]:
-                    if row['line_item'] not in seen_lines:
-                        all_lines.append(row['line_item'])
-                        seen_lines.add(row['line_item'])
+        # 13. Depreciation & Amortization
+        depr_map = {}
+        amort_map = {}
+        for y in years:
+            depr_map[y] = find_val(yearly_data[y]['pl'], ['depreciation'])
+            # Sometimes D&A is combined, sometimes separate. 
+            if depr_map[y] == 0:
+                # Try cash flow or notes? For now check PL items again
+                depr_map[y] = find_val(yearly_data[y]['cf'], ['depreciation'])
             
-            # 2. Build Table
-            rows = []
-            for item_name in all_lines:
-                row_obj = {"line_item": item_name, "id": f"{section_key}_{item_name}"} # Base ID
-                has_data = False
-                for y in years:
-                    # Find value for this year
-                    match = next((x for x in yearly_data[y][section_key] if x['line_item'] == item_name), None)
-                    val = match['value'] if match else 0
-                    row_obj[y] = val
-                    if val != 0: has_data = True
-                
-                # Only add if at least one year has data
-                if has_data: rows.append(row_obj)
-            return rows
+            amort_map[y] = find_val(yearly_data[y]['pl'], ['amortization'])
+        
+        consolidated['calculated_income_statement'].append(build_row("Depreciation", depr_map))
+        consolidated['calculated_income_statement'].append(build_row("Amortization", amort_map))
 
-        consolidated = {
-            "years": years,
-            "calculated_model": calculated_rows,
-            "adjustments": adjustments,
-            "raw_views": {
-                "pl": consolidate_raw_section('statement_of_profit_or_loss'),
-                "bs": consolidate_raw_section('statement_of_financial_position'),
-                "cf": consolidate_raw_section('statement_of_cash_flows')
-            }
-        }
+        # 14. EBIT (EBITDA - Depr - Amort)
+        ebit_map = {}
+        for y in years:
+            ebit_map[y] = ebitda_map[y] - depr_map[y] - amort_map[y]
+        consolidated['calculated_income_statement'].append(build_row("EBIT", ebit_map))
+
+        # 15. EBIT Margin
+        ebit_pct_map = {}
+        for y in years:
+            rev = rev_map[y] if rev_map[y] != 0 else 1
+            ebit_pct_map[y] = (ebit_map[y] / rev) * 100
+        consolidated['calculated_income_statement'].append(build_row("EBIT Margin %", ebit_pct_map, True))
+
+        # 16. Interest Expenses
+        int_map = {}
+        for y in years:
+            int_map[y] = find_val(yearly_data[y]['pl'], ['finance cost', 'interest exp'])
+        consolidated['calculated_income_statement'].append(build_row("Interest Expenses", int_map))
+
+        # 17. EBT (EBIT - Interest)
+        ebt_map = {}
+        for y in years:
+            ebt_map[y] = ebit_map[y] - int_map[y]
+        consolidated['calculated_income_statement'].append(build_row("EBT", ebt_map))
+
+        # 18. EBT Margin
+        ebt_pct_map = {}
+        for y in years:
+            rev = rev_map[y] if rev_map[y] != 0 else 1
+            ebt_pct_map[y] = (ebt_map[y] / rev) * 100
+        consolidated['calculated_income_statement'].append(build_row("EBT Margin %", ebt_pct_map, True))
+
+        # 19. Taxes (9% on EBIT as requested)
+        tax_map = {}
+        for y in years:
+            tax_map[y] = ebit_map[y] * 0.09
+        consolidated['calculated_income_statement'].append(build_row("Taxes (9% on EBIT)", tax_map))
+
+        # 20. Net Income (EBT - Taxes)
+        ni_map = {}
+        for y in years:
+            ni_map[y] = ebt_map[y] - tax_map[y]
+        consolidated['calculated_income_statement'].append(build_row("Net Income", ni_map))
+
+        # 21. Net Income Margin
+        ni_pct_map = {}
+        for y in years:
+            rev = rev_map[y] if rev_map[y] != 0 else 1
+            ni_pct_map[y] = (ni_map[y] / rev) * 100
+        consolidated['calculated_income_statement'].append(build_row("Net Income Margin %", ni_pct_map, True))
 
         return jsonify(consolidated), 200
 
     except Exception as e:
         print(e)
         return jsonify({"error": str(e)}), 500
+
 @app.route('/export_consolidated/<company_id>', methods=['GET'])
 def export_consolidated(company_id):
     try:
