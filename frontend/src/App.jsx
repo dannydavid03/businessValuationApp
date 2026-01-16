@@ -113,70 +113,205 @@ const ExtractionViewer = ({ data, year, onBack }) => {
 };
 
 // ==========================================
-// 2. COMBINED VIEWER COMPONENT
+// 2. COMBINED VIEWER (ENHANCED)
 // ==========================================
 const CombinedViewer = ({ companyId, onBack }) => {
   const [data, setData] = useState(null);
+  const [activeTab, setActiveTab] = useState('model'); // model, pl, bs, cf
+  const [loading, setLoading] = useState(false);
+  const [editingCell, setEditingCell] = useState(null); // { id, year }
+  const [commentingCell, setCommentingCell] = useState(null); // { id, year }
 
-  useEffect(() => {
-    axios.post(`${API_URL}/consolidate`, { company_id: companyId })
-      .then(res => setData(res.data))
-      .catch(err => alert("Failed to load combined view"));
-  }, [companyId]);
-
-  const exportToExcel = () => {
-    if (!data) return;
-    const ws = XLSX.utils.json_to_sheet(data.calculated_income_statement);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Calculated IS");
-    XLSX.writeFile(wb, "Combined_Valuation_Model.xlsx");
+  // Fetch Logic
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const res = await axios.post(`${API_URL}/consolidate`, { company_id: companyId });
+      setData(res.data);
+    } catch (err) { alert("Failed to load"); }
+    setLoading(false);
   };
 
-  if (!data) return <div className="text-center p-10">Loading Combined View...</div>;
+  useEffect(() => { loadData(); }, [companyId]);
 
-  return (
-    <div className="flex h-[85vh] flex-col bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
-      <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-purple-50">
-        <div>
-          <h2 className="font-bold text-xl text-purple-900">Combined Valuation View</h2>
-          <p className="text-xs text-purple-600 mt-1">Automated Income Statement Model</p>
-        </div>
-        <div className="flex gap-3">
-          <button onClick={exportToExcel} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 shadow-sm">
-            Download Excel
-          </button>
-          <button onClick={onBack} className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm hover:bg-gray-50">
-            ← Back to Project
-          </button>
-        </div>
-      </div>
-      
-      <div className="flex-1 overflow-auto p-6">
+  // Handle Edit
+  const handleValueChange = async (rowId, year, newValue, sectionKey) => {
+    // Determine the unique key for adjustment
+    // If it's the 'model' tab, we use CALCULATED_ prefix unless mapped
+    // If it's raw tabs, we use {sectionKey}_{lineItem}_{year}
+    
+    let key = "";
+    if (activeTab === 'model') {
+       // For model, we usually don't edit calculated fields directly unless we want to override the final number
+       // But the backend build_row uses ID: "CALC_{label}"
+       // Let's assume we allow overriding the calculated output
+       const label = rowId.replace("CALC_", "").replace(/_/g, " ");
+       key = `CALCULATED_${label}_${year}`;
+    } else {
+       // Raw view ID format from backend: "{section_key}_{line_item}"
+       // We need to reconstruct the key used in backend loop: "{section}_{line_item}_{year}"
+       // The row.id passed here is already unique to the line item
+       const lineItem = rowId.split(sectionKey + "_")[1];
+       key = `${sectionKey}_${lineItem}_${year}`;
+    }
+
+    // Optimistic Update? No, let's trigger recalc to see impact
+    try {
+      await axios.post(`${API_URL}/adjustments`, {
+        company_id: companyId,
+        updates: [{ key, value: newValue }]
+      });
+      loadData(); // Reload to see effects (recalculation)
+    } catch (e) { alert("Failed to save"); }
+    setEditingCell(null);
+  };
+
+  const handleCommentSave = async (key, comment) => {
+    try {
+        await axios.post(`${API_URL}/adjustments`, {
+          company_id: companyId,
+          updates: [{ key, comment }]
+        });
+        loadData();
+    } catch (e) { alert("Failed to save comment"); }
+    setCommentingCell(null);
+  };
+
+  const renderTable = (rows, sectionKey) => {
+    if (!data) return null;
+    return (
+      <div className="overflow-x-auto">
         <table className="min-w-full text-sm border-collapse border border-gray-200">
-          <thead className="bg-gray-100 text-gray-700 sticky top-0">
+          <thead className="bg-gray-100 text-gray-700 sticky top-0 z-10">
             <tr>
-              <th className="border p-3 text-left min-w-[300px]">Line Item</th>
-              {data.years.map(y => <th key={y} className="border p-3 text-right w-32">{y}</th>)}
+              <th className="border p-3 text-left min-w-[300px] shadow-sm bg-gray-100">Line Item</th>
+              {data.years.map(y => <th key={y} className="border p-3 text-right w-32 min-w-[120px] bg-gray-100">{y}</th>)}
             </tr>
           </thead>
           <tbody>
-            {data.calculated_income_statement.map((row, idx) => (
-              <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50 hover:bg-blue-50'}>
-                <td className="border p-3 font-medium text-gray-700">{row.line_item}</td>
-                {data.years.map(y => (
-                  <td key={y} className="border p-3 text-right font-mono text-gray-600">
-                    {typeof row[y] === 'number' ? row[y].toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0}) : row[y]}
-                  </td>
-                ))}
+            {rows.map((row, idx) => (
+              <tr key={idx} className={`group ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50 hover:bg-blue-50'}`}>
+                <td className="border p-3 font-medium text-gray-700 flex justify-between items-center">
+                  <span>{row.line_item}</span>
+                </td>
+                {data.years.map(y => {
+                  // Unique Key for this cell
+                  const lineItem = sectionKey === 'calculated' ? row.line_item : row.line_item;
+                  const adjKey = sectionKey === 'calculated' 
+                      ? `CALCULATED_${lineItem}_${y}` 
+                      : `${sectionKey}_${lineItem}_${y}`;
+                  
+                  const hasAdj = data.adjustments && data.adjustments[adjKey];
+                  const hasComment = hasAdj && hasAdj.comment;
+                  const isModified = hasAdj && hasAdj.value !== undefined;
+
+                  return (
+                    <td key={y} 
+                        className={`border p-1 text-right font-mono relative group-td ${isModified ? 'bg-yellow-50 font-bold text-blue-800' : 'text-gray-600'}`}
+                    >
+                      {editingCell?.id === row.id && editingCell?.year === y ? (
+                        <input 
+                          autoFocus
+                          className="w-full text-right p-1 border border-blue-500 rounded outline-none bg-white"
+                          defaultValue={typeof row[y] === 'number' ? row[y] : parseFloat(String(row[y]).replace('%','')) || 0}
+                          onBlur={(e) => handleValueChange(row.id, y, e.target.value, sectionKey)}
+                          onKeyDown={(e) => { if(e.key === 'Enter') e.target.blur(); }}
+                        />
+                      ) : (
+                        <div className="flex items-center justify-end h-full w-full px-2 cursor-pointer hover:bg-gray-100" onClick={() => setEditingCell({ id: row.id, year: y })}>
+                          <span>{typeof row[y] === 'number' ? row[y].toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0}) : row[y]}</span>
+                          {hasComment && (
+                             <span className="ml-2 text-[10px] text-yellow-600 cursor-help" title={hasAdj.comment}>💬</span>
+                          )}
+                          <button 
+                            className="opacity-0 group-hover:opacity-100 group-td:hover:opacity-100 ml-2 text-[10px] text-gray-400 hover:text-blue-600"
+                            onClick={(e) => { e.stopPropagation(); setCommentingCell({ key: adjKey, val: hasAdj?.comment || '' }); }}
+                          >
+                            📝
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+    );
+  };
+
+  if (!data) return <div className="text-center p-10">Loading Combined Model...</div>;
+
+  return (
+    <div className="flex h-[90vh] flex-col bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden relative">
+      {/* Header */}
+      <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-gray-900 text-white">
+        <div>
+          <h2 className="font-bold text-xl">Financial Model</h2>
+          <p className="text-xs text-gray-400">Values are editable. Edits trigger auto-calculation.</p>
+        </div>
+        <div className="flex gap-2">
+           <button onClick={() => {
+              const ws = XLSX.utils.json_to_sheet(data.calculated_model);
+              const wb = XLSX.utils.book_new();
+              XLSX.utils.book_append_sheet(wb, ws, "Valuation");
+              XLSX.writeFile(wb, "Valuation_Model.xlsx");
+           }} className="px-3 py-1 bg-green-600 rounded text-sm hover:bg-green-700">Export Excel</button>
+           <button onClick={onBack} className="px-3 py-1 bg-gray-700 rounded text-sm hover:bg-gray-600">Close</button>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex bg-gray-100 border-b px-4 gap-2 pt-2">
+        {[
+          { id: 'model', label: '📊 Income statement' },
+          { id: 'pl', label: '📉 Profit & Loss' },
+          { id: 'bs', label: '🏛 Balance Sheet' },
+          { id: 'cf', label: '💸 Cash Flow' },
+        ].map(tab => (
+          <button 
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-6 py-2 rounded-t-lg text-sm font-bold transition-all ${activeTab === tab.id ? 'bg-white text-blue-600 shadow-sm translate-y-[1px]' : 'text-gray-500 hover:bg-gray-200'}`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-auto bg-white p-6 relative">
+        {loading && <div className="absolute inset-0 bg-white/50 z-20 flex items-center justify-center"><span className="bg-black text-white px-4 py-2 rounded">Recalculating...</span></div>}
+        
+        {activeTab === 'model' && renderTable(data.calculated_model, 'calculated')}
+        {activeTab === 'pl' && renderTable(data.raw_views.pl, 'statement_of_profit_or_loss')}
+        {activeTab === 'bs' && renderTable(data.raw_views.bs, 'statement_of_financial_position')}
+        {activeTab === 'cf' && renderTable(data.raw_views.cf, 'statement_of_cash_flows')}
+      </div>
+
+      {/* Comment Modal */}
+      {commentingCell && (
+        <div className="absolute inset-0 bg-black/20 flex items-center justify-center z-50">
+          <div className="bg-white p-4 rounded-lg shadow-xl w-96 border">
+            <h3 className="font-bold mb-2">Add Comment</h3>
+            <textarea 
+              className="w-full border p-2 rounded mb-2" 
+              rows={3}
+              defaultValue={commentingCell.val} 
+              id="commentText"
+            />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setCommentingCell(null)} className="px-3 py-1 text-sm text-gray-500">Cancel</button>
+              <button onClick={() => handleCommentSave(commentingCell.key, document.getElementById('commentText').value)} className="px-3 py-1 text-sm bg-blue-600 text-white rounded">Save</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
-
 // ==========================================
 // 3. MAIN APP COMPONENT
 // ==========================================
