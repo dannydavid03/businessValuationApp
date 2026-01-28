@@ -203,6 +203,12 @@ def consolidate_data():
         company_id = data.get('company_id')
         if not company_id: return jsonify({"error": "Missing company_id"}), 400
 
+        # NEW: Check for saved manual overrides first
+        saved_file = os.path.join(BASE_DIR, company_id, 'consolidated_saved.json')
+        if os.path.exists(saved_file):
+            with open(saved_file, 'r') as f:
+                return jsonify(json.load(f)), 200
+
         projects = load_projects()
         if company_id not in projects: return jsonify({"error": "Project not found"}), 404
         
@@ -234,16 +240,16 @@ def consolidate_data():
                 yearly_data[year] = {"pl": [], "bs": [], "cf": [], "tb": [], "note_tables": {}}
 
         # --- HELPER: BUILD ROW ---
-        def build_row(label, value_map, format_as_percent=False, is_header=False):
-            row = {"line_item": label, "is_header": is_header}
-            if is_header:
-                for y in years: row[y] = ""
-            else:
-                for y in years:
-                    val = value_map.get(y, 0)
-                    row[y] = f"{val:.1f}%" if format_as_percent else val
-            return row
-
+            def build_row(label, value_map, format_as_percent=False, is_header=False):
+                        row = {"line_item": label, "is_header": is_header, "is_percentage": format_as_percent} # Added is_percentage flag
+                        if is_header:
+                            for y in years: row[y] = ""
+                        else:
+                            for y in years:
+                                val = value_map.get(y, 0)
+                                # KEEP RAW NUMBERS for frontend calculation, formatting happens in UI
+                                row[y] = val 
+                        return row
         # ==========================================
         # 1. INCOME STATEMENT CALCULATIONS
         # ==========================================
@@ -603,6 +609,37 @@ def delete_file():
             return jsonify({"message": "Deleted"}), 200
         return jsonify({"error": "Not found"}), 404
     except Exception as e: return jsonify({"error": str(e)}), 500
+
+@app.route('/save_consolidated', methods=['POST'])
+def save_consolidated():
+    try:
+        data = request.json
+        company_id = data.get('company_id')
+        consolidated_data = data.get('data')
+        
+        if not company_id or not consolidated_data:
+            return jsonify({"error": "Missing data"}), 400
+            
+        save_path = os.path.join(BASE_DIR, company_id, 'consolidated_saved.json')
+        with open(save_path, 'w') as f:
+            json.dump(consolidated_data, f, indent=4)
+            
+        return jsonify({"message": "Saved successfully"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# --- NEW: RESET TO ORIGINAL ---
+@app.route('/reset_consolidated', methods=['POST'])
+def reset_consolidated():
+    try:
+        data = request.json
+        company_id = data.get('company_id')
+        save_path = os.path.join(BASE_DIR, company_id, 'consolidated_saved.json')
+        if os.path.exists(save_path):
+            os.remove(save_path)
+        return jsonify({"message": "Reset to original extraction"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     os.makedirs(BASE_DIR, exist_ok=True)

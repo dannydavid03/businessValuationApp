@@ -156,39 +156,168 @@ const ExtractionViewer = ({ data, year, onBack }) => {
 };
 
 // ==========================================
-// 2. COMBINED VIEWER COMPONENT
+// 2. COMBINED VIEWER COMPONENT (Fixed Reset Race Condition)
 // ==========================================
 const CombinedViewer = ({ companyId, onBack }) => {
   const [data, setData] = useState(null);
-  // Updated default tab or keep 'is'
   const [activeTab, setActiveTab] = useState('is'); 
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [viewVersion, setViewVersion] = useState(0); 
 
   useEffect(() => {
-    axios.post(`${API_URL}/consolidate`, { company_id: companyId })
-      .then(res => setData(res.data))
-      .catch(err => alert("Failed to load combined view"));
+    fetchData();
   }, [companyId]);
+
+  // FIX 1: Return the axios promise so we can chain off it
+  const fetchData = () => {
+    return axios.post(`${API_URL}/consolidate`, { company_id: companyId })
+      .then(res => {
+        setData(res.data);
+        return res.data; // Return data for chaining
+      })
+      .catch(err => alert("Failed to load combined view"));
+  };
+
+  // FIX 2: Wait for fetchData() to finish before incrementing viewVersion
+  const handleReset = () => {
+    if(!window.confirm("This will revert all manual edits to the original AI extraction. Continue?")) return;
+    
+    axios.post(`${API_URL}/reset_consolidated`, { company_id: companyId })
+      .then(() => {
+        // Chain the fetch: Get Data FIRST -> THEN Refresh View
+        fetchData().then(() => {
+            setViewVersion(v => v + 1); 
+            setLastUpdated(null);
+        });
+      })
+      .catch(err => alert("Reset failed"));
+  };
+
+  // --- CALCULATION ENGINE ---
+  const recalculateFinancials = (currentData) => {
+    const newData = JSON.parse(JSON.stringify(currentData)); // Deep Copy
+    const years = newData.years;
+    const isRows = newData.calculated_income_statement;
+    
+    // Helpers
+    const findRow = (rows, labelPart) => rows.find(r => r.line_item.toLowerCase().includes(labelPart.toLowerCase()));
+    const getVal = (row, year) => {
+      if (!row) return 0;
+      let val = row[year];
+      if (typeof val === 'string') val = parseFloat(val.replace('%', '').replace(/,/g, ''));
+      return isNaN(val) ? 0 : val;
+    };
+    const setVal = (row, year, val, isPct=false) => {
+        if(row) row[year] = val; 
+    };
+
+    // 1. RECALCULATE INCOME STATEMENT
+    const revenueRow = findRow(isRows, "Revenue from Operations");
+    const cogsRow = findRow(isRows, "Cost Of Sales");
+    const gpRow = findRow(isRows, "Gross Profit");
+    const otherIncRow = findRow(isRows, "Other Income");
+    const gaRow = findRow(isRows, "General & Administrative");
+    const ebitdaRow = findRow(isRows, "EBITDA");
+    const deprRow = findRow(isRows, "Depreciation");
+    const amortRow = findRow(isRows, "Amortization");
+    const intRow = findRow(isRows, "Interest Expenses");
+    const niRow = findRow(isRows, "Net Income");
+    const taxRow = findRow(isRows, "Taxes");
+
+    years.forEach((year, idx) => {
+      // GP
+      const rev = getVal(revenueRow, year);
+      const cogs = getVal(cogsRow, year);
+      const gp = rev + cogs; 
+      setVal(gpRow, year, gp);
+
+      // Growth
+      if (idx > 0) {
+        const prevRev = getVal(revenueRow, years[idx-1]);
+        const growth = prevRev !== 0 ? ((rev - prevRev) / prevRev) * 100 : 0;
+        setVal(findRow(isRows, "Growth Rate"), year, growth, true);
+      }
+
+      // Margins
+      setVal(findRow(isRows, "COS%"), year, rev!==0 ? Math.abs((cogs/rev)*100) : 0, true);
+      setVal(findRow(isRows, "GP Margin"), year, rev!==0 ? (gp/rev)*100 : 0, true);
+
+      // EBITDA
+      const other = getVal(otherIncRow, year);
+      const ga = getVal(gaRow, year);
+      const ebitda = gp + other + ga;
+      setVal(ebitdaRow, year, ebitda);
+      setVal(findRow(isRows, "EBITDA Margin"), year, rev!==0 ? (ebitda/rev)*100 : 0, true);
+
+      // EBIT
+      const depr = getVal(deprRow, year);
+      const amort = getVal(amortRow, year);
+      const ebit = ebitda - depr - amort;
+      setVal(findRow(isRows, "EBIT"), year, ebit);
+      setVal(findRow(isRows, "EBIT Margin"), year, rev!==0 ? (ebit/rev)*100 : 0, true);
+
+      // EBT
+      const interest = getVal(intRow, year);
+      const ebt = ebit - interest;
+      setVal(findRow(isRows, "EBT"), year, ebt);
+      setVal(findRow(isRows, "EBT Margin"), year, rev!==0 ? (ebt/rev)*100 : 0, true);
+
+      // Net Income
+      const tax = getVal(taxRow, year);
+      const ni = ebt - tax;
+      setVal(niRow, year, ni);
+      setVal(findRow(isRows, "Net Income Margin"), year, rev!==0 ? (ni/rev)*100 : 0, true);
+    });
+
+    return newData;
+  };
+
+  const handleUpdate = () => {
+    setIsUpdating(true);
+    const updatedData = recalculateFinancials(data);
+    
+    axios.post(`${API_URL}/save_consolidated`, { company_id: companyId, data: updatedData })
+      .then(() => {
+        setData(updatedData);
+        setViewVersion(v => v + 1); // Refresh inputs
+        setLastUpdated(new Date());
+        setIsUpdating(false);
+      })
+      .catch(err => {
+        setIsUpdating(false);
+        alert("Update failed");
+      });
+  };
+
+  const handleCellChange = (rowIndex, year, value) => {
+    const newData = { ...data }; 
+    let targetList;
+    if (activeTab === 'is') targetList = newData.calculated_income_statement;
+    else if (activeTab === 'bs') targetList = newData.calculated_balance_sheet;
+    else targetList = newData.calculated_cash_flow;
+
+    let cleanVal = value.replace(/,/g, '').replace('%', '');
+    let numVal = parseFloat(cleanVal);
+    if (isNaN(numVal)) numVal = 0;
+
+    targetList[rowIndex][year] = numVal;
+    setData(newData);
+  };
 
   const exportToExcel = () => {
     if (!data) return;
     const wb = XLSX.utils.book_new();
-    
-    // Sheet 1: Income Statement
     const ws1 = XLSX.utils.json_to_sheet(data.calculated_income_statement);
     XLSX.utils.book_append_sheet(wb, ws1, "Income Statement");
-    
-    // Sheet 2: Balance Sheet
     if (data.calculated_balance_sheet) {
       const ws2 = XLSX.utils.json_to_sheet(data.calculated_balance_sheet);
       XLSX.utils.book_append_sheet(wb, ws2, "Balance Sheet");
     }
-
-    // Sheet 3: Cash Flow (NEW)
     if (data.calculated_cash_flow) {
       const ws3 = XLSX.utils.json_to_sheet(data.calculated_cash_flow);
       XLSX.utils.book_append_sheet(wb, ws3, "Cash Flow");
     }
-
     XLSX.writeFile(wb, `Valuation_Model_${companyId.slice(0,5)}.xlsx`);
   };
 
@@ -201,22 +330,36 @@ const CombinedViewer = ({ companyId, onBack }) => {
     </div>
   );
 
-  // Determine which data to show
   let viewData = [];
   if (activeTab === 'is') viewData = data.calculated_income_statement;
   else if (activeTab === 'bs') viewData = data.calculated_balance_sheet;
-  else if (activeTab === 'cf') viewData = data.calculated_cash_flow; // New Case
+  else if (activeTab === 'cf') viewData = data.calculated_cash_flow;
 
   return (
     <div className="flex h-[88vh] flex-col bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
       <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-purple-50">
         <div>
           <h2 className="font-bold text-xl text-purple-900">Multi-Year Consolidation</h2>
-          <p className="text-xs text-purple-600 mt-1 uppercase tracking-tighter font-semibold">Automated Financial Engine</p>
+          <div className="flex gap-2 text-xs mt-1">
+             <span className="text-purple-600 uppercase tracking-tighter font-semibold">Interactive Model</span>
+             {lastUpdated && <span className="text-emerald-600 font-medium"> • Updated {lastUpdated.toLocaleTimeString()}</span>}
+          </div>
         </div>
         <div className="flex gap-3">
+          <button onClick={handleReset} className="px-4 py-2 text-xs font-bold text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+            Reset Data
+          </button>
+          
+          <button 
+            onClick={handleUpdate} 
+            disabled={isUpdating} 
+            className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-black hover:bg-blue-700 shadow-md hover:shadow-lg transition-all flex items-center gap-2 transform hover:-translate-y-0.5"
+          >
+            {isUpdating ? 'Calculating...' : '🔄 Update & Calculate'}
+          </button>
+
           <button onClick={exportToExcel} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700 shadow-sm transition-all flex items-center gap-2">
-            <span>⬇</span> Export XLSX
+            <span>⬇</span> XLSX
           </button>
           <button onClick={onBack} className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
             ← Back
@@ -224,27 +367,16 @@ const CombinedViewer = ({ companyId, onBack }) => {
         </div>
       </div>
 
-      {/* TABS HEADER */}
       <div className="flex border-b border-gray-200 bg-white">
-        <button
-          onClick={() => setActiveTab('is')}
-          className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all ${activeTab === 'is' ? 'border-purple-600 text-purple-600 bg-purple-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-        >
-          Income Statement
-        </button>
-        <button
-          onClick={() => setActiveTab('bs')}
-          className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all ${activeTab === 'bs' ? 'border-purple-600 text-purple-600 bg-purple-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-        >
-          Balance Sheet
-        </button>
-        {/* NEW TAB BUTTON */}
-        <button
-          onClick={() => setActiveTab('cf')}
-          className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all ${activeTab === 'cf' ? 'border-purple-600 text-purple-600 bg-purple-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
-        >
-          Cash Flow
-        </button>
+        {['is', 'bs', 'cf'].map(tab => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all ${activeTab === tab ? 'border-purple-600 text-purple-600 bg-purple-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+          >
+            {tab === 'is' ? 'Income Statement' : tab === 'bs' ? 'Balance Sheet' : 'Cash Flow'}
+          </button>
+        ))}
       </div>
       
       <div className="flex-1 overflow-auto p-6 bg-gray-50/30">
@@ -255,15 +387,27 @@ const CombinedViewer = ({ companyId, onBack }) => {
               {data.years.map(y => <th key={y} className="border-b p-4 text-right w-40 font-bold bg-gray-50">{y}</th>)}
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
+          
+          <tbody key={viewVersion} className="divide-y divide-gray-100">
             {viewData.map((row, idx) => (
               <tr key={idx} className={`${row.is_header ? 'bg-gray-100 font-bold' : (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50')} hover:bg-purple-50 transition-colors`}>
                 <td className={`p-4 font-medium ${row.is_header ? 'text-gray-800' : (row.line_item.includes('%') ? 'text-blue-600 italic text-xs' : 'text-gray-700 pl-8')}`}>
                   {row.line_item}
                 </td>
                 {data.years.map(y => (
-                  <td key={y} className="p-4 text-right font-mono text-gray-600">
-                    {row.is_header ? '' : (typeof row[y] === 'number' ? row[y].toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0}) : row[y])}
+                  <td key={y} className="p-2 text-right font-mono text-gray-600">
+                    {row.is_header ? '' : (
+                      <input 
+                        type="text" 
+                        defaultValue={typeof row[y] === 'number' ? 
+                            (row.line_item.includes('%') || row.line_item.includes('Rate') 
+                                ? row[y].toFixed(1) + '%' 
+                                : row[y].toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})) 
+                            : row[y]}
+                        onBlur={(e) => handleCellChange(idx, y, e.target.value)}
+                        className="w-full text-right bg-transparent border border-transparent hover:border-gray-300 focus:border-purple-500 focus:bg-white focus:outline-none rounded px-2 py-1 transition-all"
+                      />
+                    )}
                   </td>
                 ))}
               </tr>
