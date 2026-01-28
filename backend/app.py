@@ -209,7 +209,8 @@ def consolidate_data():
         years = sorted(projects[company_id].get('years', []))
         consolidated = {
             "years": years,
-            "calculated_income_statement": []
+            "calculated_income_statement": [],
+            "calculated_balance_sheet": []
         }
 
         # Temp storage for calc logic
@@ -231,14 +232,21 @@ def consolidate_data():
             else:
                 yearly_data[year] = {"pl": [], "bs": [], "cf": [], "tb": [], "note_tables": {}}
 
-        # --- CALCULATE METRICS ROW BY ROW ---
-        def build_row(label, value_map, format_as_percent=False):
-            row = {"line_item": label, "is_header": False}
-            for y in years:
-                val = value_map.get(y, 0)
-                row[y] = f"{val:.1f}%" if format_as_percent else val
+        # --- HELPER: BUILD ROW ---
+        def build_row(label, value_map, format_as_percent=False, is_header=False):
+            row = {"line_item": label, "is_header": is_header}
+            if is_header:
+                for y in years: row[y] = ""
+            else:
+                for y in years:
+                    val = value_map.get(y, 0)
+                    row[y] = f"{val:.1f}%" if format_as_percent else val
             return row
 
+        # ==========================================
+        # 1. INCOME STATEMENT CALCULATIONS
+        # ==========================================
+        
         # 1. Revenue
         rev_map = {}
         for y in years:
@@ -257,21 +265,19 @@ def consolidate_data():
                 else: growth_map[y] = 0
         consolidated['calculated_income_statement'].append(build_row("Revenue Growth Rate (%)", growth_map, True))
 
-        # 3. COGS (Revised: Look in Note 17 Table first)
+        # 3. COGS
         cogs_map = {}
         for y in years:
             cogs_map[y] = find_val(yearly_data[y]['pl'], ['cost of sales', 'cost of revenue', 'cost of goods'])
         consolidated['calculated_income_statement'].append(build_row("Cost Of Sales", cogs_map))
 
-
-        # 5. Gross Profit (Rev - COGS - ODE)
+        # 5. Gross Profit (Rev - COGS)
         gp_map = {}
         for y in years:
             gp_map[y] = rev_map[y] + cogs_map[y]
         consolidated['calculated_income_statement'].append(build_row("Gross Profit", gp_map))
 
-        # 6. COGS % (COGS / Rev)
-        # 7. GP Margin % (GP / Rev)
+        # 6. COGS % & GP Margin %
         cogs_pct_map = {}
         gp_margin_map = {}
         for y in years:
@@ -300,7 +306,7 @@ def consolidate_data():
             ga_pct_map[y] = np.abs((ga_map[y] / rev) * 100)
         consolidated['calculated_income_statement'].append(build_row("G&A as % of Revenue", ga_pct_map, True))
 
-        # 11. EBITDA (GP + Other Income - G&A)
+        # 11. EBITDA
         ebitda_map = {}
         for y in years:
             ebitda_map[y] = gp_map[y] + other_inc_map[y] + ga_map[y]
@@ -326,7 +332,7 @@ def consolidate_data():
         consolidated['calculated_income_statement'].append(build_row("Depreciation", depr_map))
         consolidated['calculated_income_statement'].append(build_row("Amortization", amort_map))
 
-        # 14. EBIT (EBITDA - Depr - Amort)
+        # 14. EBIT
         ebit_map = {}
         for y in years:
             ebit_map[y] = ebitda_map[y] - depr_map[y] - amort_map[y]
@@ -345,7 +351,7 @@ def consolidate_data():
             int_map[y] = find_val(yearly_data[y]['pl'], ['finance cost', 'interest exp'])
         consolidated['calculated_income_statement'].append(build_row("Interest Expenses", int_map))
 
-        # 17. EBT (EBIT - Interest)
+        # 17. EBT
         ebt_map = {}
         for y in years:
             ebt_map[y] = ebit_map[y] - int_map[y]
@@ -358,13 +364,13 @@ def consolidate_data():
             ebt_pct_map[y] = (ebt_map[y] / rev) * 100
         consolidated['calculated_income_statement'].append(build_row("EBT Margin %", ebt_pct_map, True))
 
-        # 19. Taxes (9% on EBIT as requested)
+        # 19. Taxes
         tax_map = {}
         for y in years:
             tax_map[y] = ebit_map[y] * 0.09
         consolidated['calculated_income_statement'].append(build_row("Taxes (9% on EBIT)", tax_map))
 
-        # 20. Net Income (EBT - Taxes)
+        # 20. Net Income
         ni_map = {}
         for y in years:
             ni_map[y] = ebt_map[y] - tax_map[y]
@@ -376,6 +382,93 @@ def consolidate_data():
             rev = rev_map[y] if rev_map[y] != 0 else 1
             ni_pct_map[y] = (ni_map[y] / rev) * 100
         consolidated['calculated_income_statement'].append(build_row("Net Income Margin %", ni_pct_map, True))
+
+        # ==========================================
+        # 2. BALANCE SHEET CONSOLIDATION
+        # ==========================================
+        
+        # Structure Definition: (Label, Search Keys, IsHeader)
+        # Search keys is None if it's a Header or a Total we calculate manually
+        bs_structure = [
+            ("Assets", None, True),
+            ("Non-current assets", None, True),
+            ("Property and equipment", ["property and equipment", "property, plant"], False),
+            ("Intangible assets", ["intangible assets"], False),
+            ("Total non-current assets", ["total non-current assets"], False), # Extracted directly or calculated? Using extraction for now to match source
+            ("Current Assets", None, True),
+            ("Inventories", ["inventories", "stock"], False),
+            ("Trade and other receivables", ["trade and other receivables"], False),
+            ("Cash and cash equivalents", ["cash and cash equivalents"], False),
+            ("Total current assets", ["total current assets"], False),
+            ("Total Assets", ["total assets"], False),
+            
+            ("Shareholders' funds and liabilities", None, True),
+            ("Equity", None, True),
+            ("Share capital", ["share capital"], False),
+            ("Statutory reserve", ["statutory reserve"], False),
+            ("Retained earnings/(accumulated losses)", ["retained earnings", "accumulated losses"], False),
+            ("Total equity/(deficit)", ["total equity", "total deficit"], False),
+            ("Shareholders' current accounts", ["shareholders' current", "partners' current"], False),
+            ("Total shareholders' funds", ["total shareholders' funds"], False), # Fallback to total equity if funds not explicit?
+            
+            ("Non-current liabilities", None, True),
+            ("Provision for employees' end of service benefits", ["end of service", "EOSB"], False),
+            ("Bank borrowings (NC)", ["bank borrowings", "term loan"], False), # Special handling needed for duplicate names
+            ("Total non-current liabilities", ["total non-current liabilities"], False),
+            
+            ("Current liabilities", None, True),
+            ("Trade and other payables", ["trade and other payables"], False),
+            ("Bank borrowings (C)", ["bank borrowings", "term loan"], False),
+            ("Total current liabilities", ["total current liabilities"], False),
+            ("Total liabilities", ["total liabilities"], False),
+            ("Total shareholders' funds and liabilities", ["total shareholders' funds and liabilities", "total equity and liabilities"], False)
+        ]
+
+        # Helper to find specific BS items contextually
+        def get_bs_value(year_bs_items, keywords, section_hint=None):
+            if not year_bs_items: return 0
+            
+            # Simple Filter first
+            matches = []
+            for item in year_bs_items:
+                line_item = str(item.get('line_item', '')).lower()
+                if any(k in line_item for k in keywords):
+                    val = item.get('value', 0)
+                    try: val = float(str(val).replace(',', '').strip())
+                    except: val = 0
+                    matches.append(val)
+            
+            if not matches: return 0
+            
+            # Context Logic for duplicates like "Bank borrowings"
+            if section_hint == "NC": # Non-Current (usually appears first)
+                return matches[0]
+            elif section_hint == "C": # Current (usually appears second)
+                return matches[1] if len(matches) > 1 else 0
+            
+            return matches[0]
+
+        for label, keywords, is_header in bs_structure:
+            if is_header:
+                consolidated['calculated_balance_sheet'].append(build_row(label, {}, False, True))
+                continue
+
+            row_map = {}
+            for y in years:
+                items = yearly_data[y]['bs']
+                
+                # Special handling for Bank Borrowings split
+                if label == "Bank borrowings (NC)":
+                    row_map[y] = get_bs_value(items, keywords, "NC")
+                elif label == "Bank borrowings (C)":
+                    row_map[y] = get_bs_value(items, keywords, "C")
+                else:
+                    row_map[y] = get_bs_value(items, keywords)
+            
+            # Clean up label names for display
+            display_label = label.replace(" (NC)", "").replace(" (C)", "")
+            consolidated['calculated_balance_sheet'].append(build_row(display_label, row_map, False, False))
+
 
         return jsonify(consolidated), 200
 

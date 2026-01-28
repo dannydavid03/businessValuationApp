@@ -160,6 +160,7 @@ const ExtractionViewer = ({ data, year, onBack }) => {
 // ==========================================
 const CombinedViewer = ({ companyId, onBack }) => {
   const [data, setData] = useState(null);
+  const [activeTab, setActiveTab] = useState('is'); // 'is' = Income Statement, 'bs' = Balance Sheet
 
   useEffect(() => {
     axios.post(`${API_URL}/consolidate`, { company_id: companyId })
@@ -169,9 +170,18 @@ const CombinedViewer = ({ companyId, onBack }) => {
 
   const exportToExcel = () => {
     if (!data) return;
-    const ws = XLSX.utils.json_to_sheet(data.calculated_income_statement);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Calculated IS");
+    
+    // Sheet 1: Income Statement
+    const ws1 = XLSX.utils.json_to_sheet(data.calculated_income_statement);
+    XLSX.utils.book_append_sheet(wb, ws1, "Income Statement");
+    
+    // Sheet 2: Balance Sheet
+    if (data.calculated_balance_sheet) {
+      const ws2 = XLSX.utils.json_to_sheet(data.calculated_balance_sheet);
+      XLSX.utils.book_append_sheet(wb, ws2, "Balance Sheet");
+    }
+
     XLSX.writeFile(wb, `Valuation_Model_${companyId.slice(0,5)}.xlsx`);
   };
 
@@ -184,12 +194,14 @@ const CombinedViewer = ({ companyId, onBack }) => {
     </div>
   );
 
+  const viewData = activeTab === 'is' ? data.calculated_income_statement : data.calculated_balance_sheet;
+
   return (
     <div className="flex h-[88vh] flex-col bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
       <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-purple-50">
         <div>
           <h2 className="font-bold text-xl text-purple-900">Multi-Year Consolidation</h2>
-          <p className="text-xs text-purple-600 mt-1 uppercase tracking-tighter font-semibold">Automated Income Statement Engine</p>
+          <p className="text-xs text-purple-600 mt-1 uppercase tracking-tighter font-semibold">Automated Financial Engine</p>
         </div>
         <div className="flex gap-3">
           <button onClick={exportToExcel} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700 shadow-sm transition-all flex items-center gap-2">
@@ -199,6 +211,21 @@ const CombinedViewer = ({ companyId, onBack }) => {
             ← Back
           </button>
         </div>
+      </div>
+
+      <div className="flex border-b border-gray-200 bg-white">
+        <button
+          onClick={() => setActiveTab('is')}
+          className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all ${activeTab === 'is' ? 'border-purple-600 text-purple-600 bg-purple-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+        >
+          Income Statement
+        </button>
+        <button
+          onClick={() => setActiveTab('bs')}
+          className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all ${activeTab === 'bs' ? 'border-purple-600 text-purple-600 bg-purple-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+        >
+          Balance Sheet
+        </button>
       </div>
       
       <div className="flex-1 overflow-auto p-6 bg-gray-50/30">
@@ -210,14 +237,14 @@ const CombinedViewer = ({ companyId, onBack }) => {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {data.calculated_income_statement.map((row, idx) => (
-              <tr key={idx} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'} hover:bg-purple-50 transition-colors`}>
-                <td className={`p-4 font-medium ${row.line_item.includes('%') ? 'text-blue-600 italic text-xs' : 'text-gray-700'}`}>
+            {viewData.map((row, idx) => (
+              <tr key={idx} className={`${row.is_header ? 'bg-gray-100 font-bold' : (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50')} hover:bg-purple-50 transition-colors`}>
+                <td className={`p-4 font-medium ${row.is_header ? 'text-gray-800' : (row.line_item.includes('%') ? 'text-blue-600 italic text-xs' : 'text-gray-700 pl-8')}`}>
                   {row.line_item}
                 </td>
                 {data.years.map(y => (
                   <td key={y} className="p-4 text-right font-mono text-gray-600">
-                    {typeof row[y] === 'number' ? row[y].toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0}) : row[y]}
+                    {row.is_header ? '' : (typeof row[y] === 'number' ? row[y].toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0}) : row[y])}
                   </td>
                 ))}
               </tr>
