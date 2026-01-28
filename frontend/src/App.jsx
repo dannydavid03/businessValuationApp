@@ -3,12 +3,12 @@ import axios from 'axios';
 import { useDropzone } from 'react-dropzone';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import * as XLSX from 'xlsx'; // Assuming installed or use CSV
+import * as XLSX from 'xlsx';
 
 const API_URL = 'http://localhost:5000';
 
 // ==========================================
-// 1. EXTRACTION VIEWER COMPONENT (Single Year)
+// 1. EXTRACTION VIEWER COMPONENT
 // ==========================================
 const ExtractionViewer = ({ data, year, onBack }) => {
   const [activeTab, setActiveTab] = useState('statement_of_financial_position');
@@ -17,6 +17,12 @@ const ExtractionViewer = ({ data, year, onBack }) => {
   const fsData = data.financial_statements || {};
   const tbData = data.trial_balance || [];
   const notes = fsData.notes || {};
+
+  const handleNoteClick = (noteRef) => {
+    if (notes[noteRef]) {
+      setActiveNote({ id: noteRef, content: notes[noteRef] });
+    }
+  };
 
   const renderStatementTable = (items) => {
     if (!items || !Array.isArray(items) || items.length === 0) 
@@ -28,15 +34,15 @@ const ExtractionViewer = ({ data, year, onBack }) => {
           <thead className="bg-gray-50 text-gray-700">
             <tr>
               <th className="px-6 py-3 text-left w-1/2 font-semibold">Line Item</th>
-              <th className="px-4 py-3 text-center w-24 font-semibold">Note Ref</th>
-              <th className="px-6 py-3 text-right font-semibold">Value ({year})</th>
+              <th className="px-4 py-3 text-center w-24 font-semibold">Note</th>
+              <th className="px-6 py-3 text-right font-semibold">Value (AED)</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 bg-white">
             {items.map((row, idx) => (
               <tr 
                 key={idx} 
-                className={`${row.is_header ? 'bg-gray-50 font-bold text-gray-800' : 'hover:bg-blue-50/50 text-gray-600 transition-colors'}`}
+                className={`${row.is_header ? 'bg-gray-50 font-bold text-gray-800' : 'hover:bg-blue-50/50 text-gray-600 transition-colors cursor-default'}`}
               >
                 <td className={`px-6 py-3 ${row.is_header ? '' : 'pl-10'}`}>
                   {row.line_item}
@@ -44,11 +50,8 @@ const ExtractionViewer = ({ data, year, onBack }) => {
                 <td className="px-4 py-3 text-center">
                   {row.note_ref && (
                     <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setActiveNote({ id: row.note_ref, content: notes[row.note_ref] });
-                      }}
-                      className="text-xs font-bold text-blue-600 bg-blue-50 border border-blue-200 px-2 py-1 rounded hover:bg-blue-600 hover:text-white transition-all"
+                      onClick={() => handleNoteClick(row.note_ref)}
+                      className="text-xs font-bold text-blue-600 bg-blue-50 border border-blue-200 px-2 py-1 rounded hover:bg-blue-600 hover:text-white transition-all shadow-sm"
                     >
                       {row.note_ref}
                     </button>
@@ -66,46 +69,86 @@ const ExtractionViewer = ({ data, year, onBack }) => {
   };
 
   return (
-    <div className="flex h-[85vh] gap-6 font-sans text-gray-800">
+    <div className="flex h-[88vh] gap-6 font-sans text-gray-800">
+      {/* Main Content Area */}
       <div className="flex-1 bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden flex flex-col">
         <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-gray-50/50">
           <div>
-            <h2 className="font-bold text-xl text-gray-800">Extraction Results</h2>
-            <p className="text-xs text-gray-500 mt-1">Fiscal Year: {year}</p>
+            <h2 className="font-bold text-xl text-gray-800">Financial Analysis</h2>
+            <p className="text-xs text-gray-500 mt-1 uppercase tracking-wider">Fiscal Year: {year}</p>
           </div>
-          <button onClick={onBack} className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm hover:bg-gray-50">← Back</button>
+          <button onClick={onBack} className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors shadow-sm">
+            ← Exit Viewer
+          </button>
         </div>
-        <div className="flex border-b border-gray-200 overflow-x-auto">
+        
+        <div className="flex border-b border-gray-200 bg-white sticky top-0 z-10">
           {['statement_of_financial_position', 'statement_of_profit_or_loss', 'statement_of_cash_flows', 'trial_balance'].map(id => (
             <button
               key={id}
               onClick={() => setActiveTab(id)}
-              className={`px-6 py-3 text-sm font-medium whitespace-nowrap border-b-2 ${activeTab === id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}
+              className={`px-6 py-4 text-xs font-bold whitespace-nowrap border-b-2 transition-all ${activeTab === id ? 'border-blue-600 text-blue-600 bg-blue-50/30' : 'border-transparent text-gray-400 hover:text-gray-600 hover:bg-gray-50'}`}
             >
               {id.replace(/_/g, ' ').replace('statement of ', '').toUpperCase()}
             </button>
           ))}
         </div>
-        <div className="flex-1 overflow-y-auto p-6 bg-white">
+
+        <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
           {activeTab === 'trial_balance' ? (
              tbData.length > 0 ? (
-               <div className="overflow-x-auto border rounded-lg">
+               <div className="overflow-x-auto border rounded-lg shadow-sm">
                  <table className="min-w-full text-xs">
-                   <thead className="bg-gray-100 text-gray-700"><tr>{Object.keys(tbData[0]).map((k, i) => <th key={i} className="px-4 py-2 text-left">{k}</th>)}</tr></thead>
-                   <tbody>{tbData.map((row, i) => <tr key={i} className="hover:bg-gray-50">{Object.values(row).map((v, j) => <td key={j} className="px-4 py-2 truncate">{v}</td>)}</tr>)}</tbody>
+                   <thead className="bg-gray-100 text-gray-700">
+                     <tr>{Object.keys(tbData[0]).map((k, i) => <th key={i} className="px-4 py-3 text-left font-semibold border-b">{k}</th>)}</tr>
+                   </thead>
+                   <tbody className="divide-y divide-gray-200">
+                     {tbData.map((row, i) => (
+                       <tr key={i} className="hover:bg-gray-50 transition-colors">
+                         {Object.values(row).map((v, j) => <td key={j} className="px-4 py-2 truncate max-w-[200px]">{v}</td>)}
+                       </tr>
+                     ))}
+                   </tbody>
                  </table>
                </div>
-             ) : <p className="text-gray-400 italic text-center mt-10">No Excel Trial Balance uploaded (Optional).</p>
+             ) : (
+               <div className="flex flex-col items-center justify-center h-full text-gray-400 space-y-2">
+                 <span className="text-4xl">📊</span>
+                 <p className="italic">No Trial Balance data found for this period.</p>
+               </div>
+             )
           ) : renderStatementTable(fsData[activeTab])}
         </div>
       </div>
-      <div className={`w-[500px] border border-yellow-200 bg-yellow-50 rounded-xl shadow-xl flex flex-col ${activeNote ? '' : 'hidden'}`}>
-        <div className="p-4 border-b border-yellow-200 bg-yellow-100/50 flex justify-between items-center">
-          <h3 className="font-bold text-yellow-900">Note {activeNote?.id}</h3>
-          <button onClick={() => setActiveNote(null)} className="text-yellow-700 hover:bg-yellow-200 rounded-full p-1">✕</button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-5 text-sm text-gray-800">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{activeNote?.content || ""}</ReactMarkdown>
+
+      {/* Persistent Sidebar for Notes */}
+      <div className={`w-[450px] transition-all duration-300 transform ${activeNote ? 'translate-x-0' : 'translate-x-4 opacity-0 pointer-events-none w-0'} h-full flex flex-col`}>
+        <div className="flex-1 bg-amber-50 rounded-xl shadow-xl border border-amber-200 overflow-hidden flex flex-col">
+          <div className="p-4 border-b border-amber-200 bg-amber-100/50 flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <span className="bg-amber-600 text-white text-[10px] font-bold px-2 py-0.5 rounded uppercase">Note Context</span>
+              <h3 className="font-bold text-amber-900">Reference {activeNote?.id}</h3>
+            </div>
+            <button onClick={() => setActiveNote(null)} className="text-amber-700 hover:bg-amber-200 rounded-full p-1 transition-colors">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-6 prose prose-sm prose-amber max-w-none">
+            <ReactMarkdown 
+              remarkPlugins={[remarkGfm]}
+              components={{
+                table: ({node, ...props}) => <div className="overflow-x-auto my-4"><table className="min-w-full border-collapse border border-amber-300 bg-white/50 text-xs" {...props} /></div>,
+                th: ({node, ...props}) => <th className="border border-amber-300 px-2 py-1 bg-amber-100 font-bold" {...props} />,
+                td: ({node, ...props}) => <td className="border border-amber-300 px-2 py-1" {...props} />,
+                p: ({node, ...props}) => <p className="leading-relaxed mb-4 text-amber-900" {...props} />,
+              }}
+            >
+              {activeNote?.content || ""}
+            </ReactMarkdown>
+          </div>
+          <div className="p-4 bg-amber-100/30 border-t border-amber-200 text-[10px] text-amber-600 italic">
+            Note content extracted automatically via AI from financial disclosures.
+          </div>
         </div>
       </div>
     </div>
@@ -129,42 +172,51 @@ const CombinedViewer = ({ companyId, onBack }) => {
     const ws = XLSX.utils.json_to_sheet(data.calculated_income_statement);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Calculated IS");
-    XLSX.writeFile(wb, "Combined_Valuation_Model.xlsx");
+    XLSX.writeFile(wb, `Valuation_Model_${companyId.slice(0,5)}.xlsx`);
   };
 
-  if (!data) return <div className="text-center p-10">Loading Combined View...</div>;
+  if (!data) return (
+    <div className="flex items-center justify-center h-[60vh]">
+      <div className="animate-pulse flex flex-col items-center">
+        <div className="w-12 h-12 bg-purple-200 rounded-full mb-4"></div>
+        <div className="text-purple-600 font-medium">Consolidating Financials...</div>
+      </div>
+    </div>
+  );
 
   return (
-    <div className="flex h-[85vh] flex-col bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
+    <div className="flex h-[88vh] flex-col bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
       <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-purple-50">
         <div>
-          <h2 className="font-bold text-xl text-purple-900">Combined Valuation View</h2>
-          <p className="text-xs text-purple-600 mt-1">Automated Income Statement Model</p>
+          <h2 className="font-bold text-xl text-purple-900">Multi-Year Consolidation</h2>
+          <p className="text-xs text-purple-600 mt-1 uppercase tracking-tighter font-semibold">Automated Income Statement Engine</p>
         </div>
         <div className="flex gap-3">
-          <button onClick={exportToExcel} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 shadow-sm">
-            Download Excel
+          <button onClick={exportToExcel} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-bold hover:bg-emerald-700 shadow-sm transition-all flex items-center gap-2">
+            <span>⬇</span> Export XLSX
           </button>
-          <button onClick={onBack} className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm hover:bg-gray-50">
-            ← Back to Project
+          <button onClick={onBack} className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+            ← Back
           </button>
         </div>
       </div>
       
-      <div className="flex-1 overflow-auto p-6">
-        <table className="min-w-full text-sm border-collapse border border-gray-200">
-          <thead className="bg-gray-100 text-gray-700 sticky top-0">
+      <div className="flex-1 overflow-auto p-6 bg-gray-50/30">
+        <table className="min-w-full text-sm border-collapse bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+          <thead className="bg-gray-100 text-gray-700 sticky top-0 z-10 shadow-sm">
             <tr>
-              <th className="border p-3 text-left min-w-[300px]">Line Item</th>
-              {data.years.map(y => <th key={y} className="border p-3 text-right w-32">{y}</th>)}
+              <th className="border-b p-4 text-left min-w-[320px] font-bold">Consolidated Items (AED)</th>
+              {data.years.map(y => <th key={y} className="border-b p-4 text-right w-40 font-bold bg-gray-50">{y}</th>)}
             </tr>
           </thead>
-          <tbody>
+          <tbody className="divide-y divide-gray-100">
             {data.calculated_income_statement.map((row, idx) => (
-              <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50 hover:bg-blue-50'}>
-                <td className="border p-3 font-medium text-gray-700">{row.line_item}</td>
+              <tr key={idx} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'} hover:bg-purple-50 transition-colors`}>
+                <td className={`p-4 font-medium ${row.line_item.includes('%') ? 'text-blue-600 italic text-xs' : 'text-gray-700'}`}>
+                  {row.line_item}
+                </td>
                 {data.years.map(y => (
-                  <td key={y} className="border p-3 text-right font-mono text-gray-600">
+                  <td key={y} className="p-4 text-right font-mono text-gray-600">
                     {typeof row[y] === 'number' ? row[y].toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0}) : row[y]}
                   </td>
                 ))}
@@ -178,7 +230,7 @@ const CombinedViewer = ({ companyId, onBack }) => {
 };
 
 // ==========================================
-// 3. MAIN APP COMPONENT
+// 3. UPLOAD AND MAIN APP
 // ==========================================
 const UploadSlot = ({ year, docType, companyId, existingFileName, onFileChange }) => {
   const [status, setStatus] = useState(existingFileName ? 'done' : 'idle');
@@ -198,12 +250,12 @@ const UploadSlot = ({ year, docType, companyId, existingFileName, onFileChange }
   const { getRootProps, getInputProps } = useDropzone({ onDrop, multiple: false });
 
   return (
-    <div {...getRootProps()} className={`border-2 border-dashed rounded-lg p-3 flex items-center justify-between gap-3 h-16 cursor-pointer hover:shadow-sm ${status === 'done' ? 'border-green-400 bg-green-50' : 'border-gray-300 bg-white'}`}>
+    <div {...getRootProps()} className={`border-2 border-dashed rounded-lg p-3 flex items-center justify-between gap-3 h-16 cursor-pointer hover:shadow-md transition-all ${status === 'done' ? 'border-emerald-400 bg-emerald-50' : 'border-gray-200 bg-white hover:border-blue-400'}`}>
       <input {...getInputProps()} />
-      <span className="text-xl">{status === 'done' ? '📄' : (docType === 'Trial Balance' ? '📊' : '📂')}</span>
+      <span className="text-xl shrink-0">{status === 'done' ? '✅' : (docType === 'Trial Balance' ? '📊' : '📄')}</span>
       <div className="flex flex-col overflow-hidden w-full">
-        <span className="text-[10px] uppercase text-gray-500 font-bold">{docType}</span>
-        <span className="text-xs truncate">{existingFileName || (status === 'uploading' ? 'Uploading...' : 'Drag & Drop')}</span>
+        <span className="text-[9px] uppercase text-gray-400 font-black tracking-widest leading-none mb-1">{docType}</span>
+        <span className="text-xs truncate font-medium text-gray-600">{existingFileName || (status === 'uploading' ? 'Uploading...' : 'Drop file here')}</span>
       </div>
     </div>
   );
@@ -211,14 +263,13 @@ const UploadSlot = ({ year, docType, companyId, existingFileName, onFileChange }
 
 export default function App() {
   const [step, setStep] = useState(1);
-  const [viewMode, setViewMode] = useState('project'); // 'project', 'extract', 'combined'
+  const [viewMode, setViewMode] = useState('project'); 
   const [loadingMsg, setLoadingMsg] = useState('');
   const [projectData, setProjectData] = useState(null);
   const [projectFiles, setProjectFiles] = useState({}); 
   const [extractedViewData, setExtractedViewData] = useState(null); 
   const [existingProjects, setExistingProjects] = useState([]);
   
-  // New Project Form State
   const [companyName, setCompanyName] = useState('');
   const [startYear, setStartYear] = useState(new Date().getFullYear() - 3);
   const [endYear, setEndYear] = useState(new Date().getFullYear() - 1);
@@ -235,7 +286,7 @@ export default function App() {
 
   const handleInitialize = async (e) => {
     e.preventDefault();
-    setLoadingMsg('Creating Project...');
+    setLoadingMsg('Configuring Workspace...');
     const years = [];
     for (let i = parseInt(startYear); i <= parseInt(endYear); i++) years.push(String(i));
     try {
@@ -247,85 +298,113 @@ export default function App() {
   };
 
   const handleExtract = async (year) => {
-    setLoadingMsg(`AI is analyzing ${year} data...`);
+    setLoadingMsg(`AI is digitizing ${year} report...`);
     try {
       const res = await axios.post(`${API_URL}/extract`, { company_id: projectData.company_id, year });
-      await refreshProjectFiles(projectData.company_id); // Update extracted status
+      await refreshProjectFiles(projectData.company_id);
       setExtractedViewData({ year, data: res.data });
       setViewMode('extract');
     } catch { alert("Extraction failed."); } finally { setLoadingMsg(''); }
   };
 
-  // Check how many years have been extracted
   const extractedCount = projectFiles ? Object.values(projectFiles).filter(f => f.Extracted).length : 0;
 
-  if (loadingMsg) return <div className="fixed inset-0 bg-white/90 z-50 flex items-center justify-center text-xl font-bold">{loadingMsg}</div>;
-  if (viewMode === 'extract') return <div className="p-6 bg-gray-100 min-h-screen"><ExtractionViewer data={extractedViewData.data} year={extractedViewData.year} onBack={() => setViewMode('project')} /></div>;
-  if (viewMode === 'combined') return <div className="p-6 bg-gray-100 min-h-screen"><CombinedViewer companyId={projectData.company_id} onBack={() => setViewMode('project')} /></div>;
+  if (loadingMsg) return (
+    <div className="fixed inset-0 bg-white/95 z-[100] flex flex-col items-center justify-center">
+      <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+      <div className="text-xl font-black text-gray-900 tracking-tight animate-pulse">{loadingMsg}</div>
+    </div>
+  );
+
+  if (viewMode === 'extract') return <div className="p-8 bg-gray-100 min-h-screen"><ExtractionViewer data={extractedViewData.data} year={extractedViewData.year} onBack={() => setViewMode('project')} /></div>;
+  if (viewMode === 'combined') return <div className="p-8 bg-gray-100 min-h-screen"><CombinedViewer companyId={projectData.company_id} onBack={() => setViewMode('project')} /></div>;
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col items-center p-8 font-sans text-gray-800">
-      <div className="max-w-5xl w-full bg-white rounded-2xl shadow-xl overflow-hidden min-h-[600px] flex flex-col">
-        <div className="bg-gray-900 text-white px-8 py-6 flex justify-between items-center">
-          <h1 className="text-2xl font-bold">{step === 1 ? 'Valuation Workspace' : projectData?.company_name}</h1>
-          {step === 2 && <button onClick={() => { setStep(1); setProjectData(null); }} className="text-gray-400 text-sm hover:text-white">Switch Project</button>}
+    <div className="min-h-screen bg-gray-50 flex flex-col items-center p-8 font-sans text-gray-900">
+      <div className="max-w-5xl w-full bg-white rounded-3xl shadow-2xl overflow-hidden min-h-[650px] flex flex-col border border-gray-100">
+        <div className="bg-gray-900 text-white px-10 py-8 flex justify-between items-center">
+          <div>
+            <span className="text-blue-500 text-[10px] font-black uppercase tracking-[0.2em]">Financial Intelligence Unit</span>
+            <h1 className="text-3xl font-black tracking-tighter">{step === 1 ? 'Workspace' : projectData?.company_name}</h1>
+          </div>
+          {step === 2 && <button onClick={() => { setStep(1); setProjectData(null); }} className="px-4 py-2 rounded-full border border-gray-700 text-xs font-bold hover:bg-gray-800 transition-colors uppercase tracking-widest">Switch Project</button>}
         </div>
 
         {step === 1 ? (
-          <div className="p-8 grid md:grid-cols-2 gap-8">
-            <div>
-              <h2 className="font-bold text-lg mb-4">New Project</h2>
-              <form onSubmit={handleInitialize} className="space-y-4">
-                <input className="w-full border p-3 rounded" placeholder="Company Name" value={companyName} onChange={e => setCompanyName(e.target.value)} required />
-                <div className="grid grid-cols-2 gap-4">
-                  <input type="number" className="border p-3 rounded" value={startYear} onChange={e => setStartYear(e.target.value)} />
-                  <input type="number" className="border p-3 rounded" value={endYear} onChange={e => setEndYear(e.target.value)} />
+          <div className="p-10 grid md:grid-cols-5 gap-10">
+            <div className="md:col-span-3">
+              <h2 className="font-black text-2xl mb-6 tracking-tight">Initialize Engagement</h2>
+              <form onSubmit={handleInitialize} className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-xs font-black uppercase text-gray-400 tracking-widest">Entity Name</label>
+                  <input className="w-full border-2 border-gray-100 p-4 rounded-xl focus:border-blue-500 focus:outline-none transition-colors font-medium text-lg" placeholder="e.g. Acme Corp LLC" value={companyName} onChange={e => setCompanyName(e.target.value)} required />
                 </div>
-                <button type="submit" className="w-full bg-blue-600 text-white py-3 rounded font-bold">Create</button>
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <label className="text-xs font-black uppercase text-gray-400 tracking-widest">Start Year</label>
+                    <input type="number" className="w-full border-2 border-gray-100 p-4 rounded-xl focus:border-blue-500 font-bold" value={startYear} onChange={e => setStartYear(e.target.value)} />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-black uppercase text-gray-400 tracking-widest">End Year</label>
+                    <input type="number" className="w-full border-2 border-gray-100 p-4 rounded-xl focus:border-blue-500 font-bold" value={endYear} onChange={e => setEndYear(e.target.value)} />
+                  </div>
+                </div>
+                <button type="submit" className="w-full bg-blue-600 text-white py-5 rounded-2xl font-black text-lg shadow-lg hover:bg-blue-700 hover:-translate-y-0.5 transition-all">Start Project</button>
               </form>
             </div>
-            <div>
-               <h2 className="font-bold text-lg mb-4">Recent Projects</h2>
-               <div className="space-y-2">
+            <div className="md:col-span-2 border-l border-gray-50 pl-10">
+               <h2 className="font-black text-sm uppercase text-gray-400 mb-6 tracking-widest">Recent Ledgers</h2>
+               <div className="space-y-3">
                  {existingProjects.map(p => (
-                   <div key={p.id} onClick={() => { setProjectData({company_id: p.id, company_name: p.name, years: p.years}); refreshProjectFiles(p.id); setStep(2); }} className="p-3 border rounded hover:bg-gray-50 cursor-pointer">
-                     {p.name}
+                   <div key={p.id} onClick={() => { setProjectData({company_id: p.id, company_name: p.name, years: p.years}); refreshProjectFiles(p.id); setStep(2); }} className="p-4 border-2 border-gray-50 rounded-2xl hover:border-blue-100 hover:bg-blue-50/30 cursor-pointer transition-all flex items-center justify-between group">
+                     <span className="font-bold text-gray-700 group-hover:text-blue-700">{p.name}</span>
+                     <span className="text-[10px] bg-gray-100 px-2 py-1 rounded-md text-gray-400 font-black">OPEN</span>
                    </div>
                  ))}
+                 {existingProjects.length === 0 && <p className="text-sm text-gray-400 italic">No existing projects found.</p>}
                </div>
             </div>
           </div>
         ) : (
-          <div className="p-8 bg-gray-50/30 flex-1">
-            <div className="flex justify-end mb-6">
+          <div className="p-10 bg-gray-50/50 flex-1">
+            <div className="flex justify-between items-center mb-8">
+               <h3 className="font-black text-gray-400 uppercase tracking-widest text-xs">Period Management</h3>
               {extractedCount >= 2 && (
-                <button onClick={() => setViewMode('combined')} className="bg-purple-600 text-white px-6 py-3 rounded-lg font-bold shadow-lg hover:bg-purple-700 transition flex items-center gap-2">
-                  <span>📊</span> View Combined Analysis
+                <button onClick={() => setViewMode('combined')} className="bg-purple-600 text-white px-8 py-4 rounded-2xl font-black shadow-xl hover:bg-purple-700 hover:-translate-y-1 transition-all flex items-center gap-3 animate-bounce-short">
+                  <span className="text-xl">📊</span> View Consolidation
                 </button>
               )}
             </div>
-            <div className="space-y-4">
+            
+            <div className="space-y-6">
               {projectData.years.map(year => (
-                <div key={year} className="bg-white p-4 rounded-xl border shadow-sm flex items-center gap-4">
-                  <div className="w-16 text-center"><span className="text-2xl font-black text-gray-300">{year}</span></div>
+                <div key={year} className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm flex items-center gap-8 group hover:shadow-xl transition-all">
+                  <div className="w-20 flex flex-col items-center">
+                    <span className="text-3xl font-black text-gray-200 group-hover:text-blue-500 transition-colors">{year}</span>
+                    {projectFiles[year]?.Extracted && <span className="text-[8px] font-black text-emerald-500 uppercase mt-1 tracking-tighter">Digitized</span>}
+                  </div>
+                  
                   <div className="flex-1 grid grid-cols-2 gap-4">
                     <UploadSlot year={year} docType="Financial Statement" companyId={projectData.company_id} existingFileName={projectFiles[year]?.["Financial Statement"]} onFileChange={() => refreshProjectFiles(projectData.company_id)} />
                     <UploadSlot year={year} docType="Trial Balance" companyId={projectData.company_id} existingFileName={projectFiles[year]?.["Trial Balance"]} onFileChange={() => refreshProjectFiles(projectData.company_id)} />
                   </div>
-                  <div className="w-32">
+                  
+                  <div className="w-40 flex flex-col gap-2">
                     <button 
                       onClick={() => handleExtract(year)}
                       disabled={!projectFiles[year]?.["Financial Statement"]}
-                      className={`w-full py-3 rounded-lg font-bold text-sm ${projectFiles[year]?.["Financial Statement"] ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}
+                      className={`w-full py-4 rounded-xl font-black text-xs uppercase tracking-widest transition-all ${projectFiles[year]?.["Financial Statement"] ? 'bg-gray-900 text-white hover:bg-blue-600' : 'bg-gray-100 text-gray-300 cursor-not-allowed'}`}
                     >
-                      {projectFiles[year]?.Extracted ? 'Re-Process' : 'Process'}
+                      {projectFiles[year]?.Extracted ? 'Re-Analyze' : 'Analyze'}
                     </button>
                     {projectFiles[year]?.Extracted && (
                       <button onClick={async () => {
+                         setLoadingMsg('Loading Results...');
                          const res = await axios.post(`${API_URL}/extract`, { company_id: projectData.company_id, year });
                          setExtractedViewData({ year, data: res.data });
                          setViewMode('extract');
-                      }} className="w-full mt-2 text-xs text-blue-600 hover:underline">View Results</button>
+                         setLoadingMsg('');
+                      }} className="w-full text-[10px] font-black text-blue-600 hover:text-blue-800 uppercase tracking-tighter text-center">View JSON Extract</button>
                     )}
                   </div>
                 </div>
