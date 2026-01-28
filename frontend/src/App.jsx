@@ -160,7 +160,8 @@ const ExtractionViewer = ({ data, year, onBack }) => {
 // ==========================================
 const CombinedViewer = ({ companyId, onBack }) => {
   const [data, setData] = useState(null);
-  const [activeTab, setActiveTab] = useState('is'); // 'is' = Income Statement, 'bs' = Balance Sheet
+  // Updated default tab or keep 'is'
+  const [activeTab, setActiveTab] = useState('is'); 
 
   useEffect(() => {
     axios.post(`${API_URL}/consolidate`, { company_id: companyId })
@@ -182,6 +183,12 @@ const CombinedViewer = ({ companyId, onBack }) => {
       XLSX.utils.book_append_sheet(wb, ws2, "Balance Sheet");
     }
 
+    // Sheet 3: Cash Flow (NEW)
+    if (data.calculated_cash_flow) {
+      const ws3 = XLSX.utils.json_to_sheet(data.calculated_cash_flow);
+      XLSX.utils.book_append_sheet(wb, ws3, "Cash Flow");
+    }
+
     XLSX.writeFile(wb, `Valuation_Model_${companyId.slice(0,5)}.xlsx`);
   };
 
@@ -194,7 +201,11 @@ const CombinedViewer = ({ companyId, onBack }) => {
     </div>
   );
 
-  const viewData = activeTab === 'is' ? data.calculated_income_statement : data.calculated_balance_sheet;
+  // Determine which data to show
+  let viewData = [];
+  if (activeTab === 'is') viewData = data.calculated_income_statement;
+  else if (activeTab === 'bs') viewData = data.calculated_balance_sheet;
+  else if (activeTab === 'cf') viewData = data.calculated_cash_flow; // New Case
 
   return (
     <div className="flex h-[88vh] flex-col bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
@@ -213,6 +224,7 @@ const CombinedViewer = ({ companyId, onBack }) => {
         </div>
       </div>
 
+      {/* TABS HEADER */}
       <div className="flex border-b border-gray-200 bg-white">
         <button
           onClick={() => setActiveTab('is')}
@@ -225,6 +237,13 @@ const CombinedViewer = ({ companyId, onBack }) => {
           className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all ${activeTab === 'bs' ? 'border-purple-600 text-purple-600 bg-purple-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
         >
           Balance Sheet
+        </button>
+        {/* NEW TAB BUTTON */}
+        <button
+          onClick={() => setActiveTab('cf')}
+          className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all ${activeTab === 'cf' ? 'border-purple-600 text-purple-600 bg-purple-50/50' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+        >
+          Cash Flow
         </button>
       </div>
       
@@ -255,7 +274,6 @@ const CombinedViewer = ({ companyId, onBack }) => {
     </div>
   );
 };
-
 // ==========================================
 // 3. UPLOAD AND MAIN APP
 // ==========================================
