@@ -388,7 +388,7 @@ const CombinedViewer = ({ companyId, onBack }) => {
             </tr>
           </thead>
           
-          <tbody key={viewVersion} className="divide-y divide-gray-100">
+          <tbody key={`${viewVersion}-${activeTab}`} className="divide-y divide-gray-100">
             {viewData.map((row, idx) => (
               <tr key={idx} className={`${row.is_header ? 'bg-gray-100 font-bold' : (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50')} hover:bg-purple-50 transition-colors`}>
                 <td className={`p-4 font-medium ${row.is_header ? 'text-gray-800' : (row.line_item.includes('%') ? 'text-blue-600 italic text-xs' : 'text-gray-700 pl-8')}`}>

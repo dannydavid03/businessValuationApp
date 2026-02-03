@@ -492,14 +492,13 @@ def consolidate_data():
             ("Inventories", ["inventories"], False),
             ("Trade and other receivables", ["trade and other receivables"], False),
             ("Trade and other payables", ["trade and other payables"], False),
-            ("Cash generated from operations", ["cash generated from operations"], False),
+            ("Cash generated from operations", ["cash generated from operations", "Net cash generated from/(used in) operating activities"], False),
             ("Employees' end of service benefits paid", ["employees' end of service benefits paid", "benefits paid"], False),
             ("Net cash generated from operating activities", ["net cash generated from operating", "net cash from operating"], False),
             
             ("Cash flows from investing activities", None, True),
-            ("Purchase of property and equipment", ["purchase of property", "acquisition of property"], False),
-            ("Proceeds from disposal of property and equipment", ["proceeds from disposal"], False),
-            ("Net cash generated from/ (used in) investing activities", ["net cash generated from/ (used in) investing", "net cash used in investing", "net cash from investing"], False),
+            ("Purchase of property and equipment", ["purchase of property and equipment"], False),
+            ("Net cash generated from/ (used in) investing activities", ["net cash generated from/(used in) operating activities", "net cash used in investing", "net cash from investing"], False),
             
             ("Cash flows from financing activities", None, True),
             ("Net movements in shareholders' current accounts", ["shareholders' current"], False),
@@ -511,7 +510,6 @@ def consolidate_data():
             ("Cash and cash equivalents at the beginning of the year", ["beginning of the year"], False),
             ("Cash and cash equivalents at the end of the year", ["end of the year"], False)
         ]
-
         for label, keywords, is_header in cf_structure:
             if is_header:
                 consolidated['calculated_cash_flow'].append(build_row(label, {}, False, True))
@@ -523,8 +521,6 @@ def consolidate_data():
                 row_map[y] = find_val(yearly_data[y]['cf'], keywords)
             
             consolidated['calculated_cash_flow'].append(build_row(label, row_map, False, False))
-
-
         return jsonify(consolidated), 200
 
     except Exception as e:
